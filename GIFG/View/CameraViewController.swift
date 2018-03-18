@@ -85,9 +85,9 @@ class CameraViewController: UIViewController {
     
     func createGif() -> Void {
         if (images.isEmpty) { return }
-        let url = NSURL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(NSUUID().uuidString).gif")! as CFURL
+        let url = NSURL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(NSUUID().uuidString).gif")!
         print(url)
-        guard let destination = CGImageDestinationCreateWithURL(url, kUTTypeGIF, images.count, nil) else {
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, kUTTypeGIF, images.count, nil) else {
             print("gifの distination に失敗")
             return
         }
@@ -103,23 +103,33 @@ class CameraViewController: UIViewController {
         
         if CGImageDestinationFinalize(destination) {
             print("GIF生成")
-            guard let d = try? Data(contentsOf: url as URL) else {
-                print("Not found \(url)")
-                PHPhotoLibrary.shared().performChanges({
-                    PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url as URL)
-                }, completionHandler: nil)
-                let manager = FileManager()
-                try? manager.removeItem(at: url as URL)
-                return
-            }
-            guard let i = UIImage.init(data: d) else {
-                print("Can not load image.")
-                return
-            }
-            UIImageWriteToSavedPhotosAlbum(i, self, nil, nil)
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
+            }, completionHandler: {(res, error) in
+                if (error == nil) {
+                    self.toast(message: "写真へ保存しました")
+                    self.cleanGif(url: url)
+                } else {
+                    self.toast(message: "写真への保存に失敗しました")
+                }; })
         } else {
             print("GIF生成に失敗")
         }
+    }
+
+    func cleanGif(url: URL) -> Void {
+        let manager = FileManager()
+        try? manager.removeItem(at: url)
+        print("clean up")
+    }
+
+    func toast(message: String) -> Void {
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        self.present(alert, animated: true, completion: {
+            DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 1, execute: {
+                alert.dismiss(animated: true, completion: nil)
+            })
+        })
     }
 }
 
