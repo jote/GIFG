@@ -25,6 +25,7 @@ class CameraViewController: UIViewController {
     var session : AVCaptureSession!
     var imageOutPut : AVCapturePhotoOutput!
     var images = Array<UIImage>()
+    var previewLayer : AVCaptureVideoPreviewLayer!
     
     override func viewDidLoad() {
         edgesForExtendedLayout = []
@@ -44,10 +45,11 @@ class CameraViewController: UIViewController {
             let videoInput = try! AVCaptureDeviceInput.init(device: device)
             session.addInput(videoInput)
             session.addOutput(imageOutPut)
-            let previewLayer = AVCaptureVideoPreviewLayer.init(session: session) //TODO nilのときがある?
+            previewLayer = AVCaptureVideoPreviewLayer.init(session: session) //TODO nilのときがある?
             previewLayer.videoGravity = AVLayerVideoGravity.resizeAspectFill
             view.layer.addSublayer(previewLayer)
             session.startRunning()
+            setOrientation()
         }else {
             return //TODO error
         }
@@ -73,16 +75,50 @@ class CameraViewController: UIViewController {
         view.addSubview(createButton)
     }
     
+    override func viewDidAppear(_ animated: Bool) {
+        NotificationCenter.default.addObserver(self, selector: #selector(self.setOrientation(notification:)), name: .UIDeviceOrientationDidChange, object: nil)
+    }
+
+    @objc func setOrientation(notification: Notification) -> Void { setOrientation() }
+
+    func setOrientation() -> Void {
+        let deviceOrientation = UIDevice.current.orientation
+
+         //対応していない回転方向はnil
+        let previewOrientationMap : [ UIDeviceOrientation : AVCaptureVideoOrientation? ] = [
+            .portrait : .portrait,
+            .portraitUpsideDown : nil,
+            .landscapeLeft : .landscapeRight,
+            .landscapeRight : .landscapeLeft,
+            .faceUp : .portrait,
+            .faceDown : nil,
+            .unknown : .portrait
+        ]
+
+        print("カメラ回転 device: \( deviceOrientation.hashValue )")
+        if let connection = previewLayer.connection, let outputConnection = imageOutPut.connection(with: .video)
+        {
+            guard let orientation = previewOrientationMap[deviceOrientation]! else { return } //対応していない回転方向の時は 前の回転状態を保つ
+            if(connection.isVideoOrientationSupported) { connection.videoOrientation = orientation }
+            if(outputConnection.isVideoOrientationSupported) { outputConnection.videoOrientation = orientation }
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        NotificationCenter.default.removeObserver(self, name: .UIDeviceOrientationDidChange, object: nil)
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+    }
+
     override func viewDidLayoutSubviews() {
         let h = (view.bounds.height - Constants.Layout.DefautPadding * 2.0) / 2.0
         label.frame = CGRect.init(x: 0, y: 0, width: h * ( 16.0 / 25.0 ), height: h)
         label.center = view.center
         view.layer.sublayers?.first?.frame = view.bounds
         
-        button.frame = CGRect.init(x: label.center.x - 50.0, y: view.bounds.height - 100.0, width: 100.0, height: 100.0)
-        createButton.frame = CGRect.init(x: button.frame.origin.x + 150, y: view.bounds.height - 100.0, width: 100.0, height: 100.0)
+        button.frame = CGRect.init(x: view.bounds.size.width - 130 , y: (view.bounds.height - 100.0)/2 , width: 100.0, height: 100.0)
+        createButton.frame = CGRect.init(x: button.frame.origin.x, y: view.bounds.height - 100.0, width: 100.0, height: 100.0)
     }
-    
+
     func createGif() -> Void {
         if (images.isEmpty) { return }
         let url = NSURL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(NSUUID().uuidString).gif")!
@@ -91,10 +127,10 @@ class CameraViewController: UIViewController {
             print("gifの distination に失敗")
             return
         }
+        let orientation = imageOutPut.connection(with: .video)?.videoOrientation ?? AVCaptureVideoOrientation.portrait
         let properties = [kCGImagePropertyGIFDictionary as String: [kCGImagePropertyGIFLoopCount as String : 0]] as CFDictionary
-        print("gif properties")
         CGImageDestinationSetProperties(destination, properties)
-        
+
         let frameProperties = [kCGImagePropertyGIFDictionary as String: [kCGImagePropertyGIFDelayTime as String : 0.2]] as CFDictionary
         for image in images {
             print("image 追加")
@@ -120,6 +156,7 @@ class CameraViewController: UIViewController {
     func cleanGif(url: URL) -> Void {
         let manager = FileManager()
         try? manager.removeItem(at: url)
+        images.removeAll()
         print("clean up")
     }
 
@@ -134,14 +171,59 @@ class CameraViewController: UIViewController {
 }
 
 extension CameraViewController: AVCapturePhotoCaptureDelegate {
+
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error = error {
+            self.toast(message: "エラーが発生しました")
             print(error.localizedDescription)
             return
         }
-        if let data = photo.fileDataRepresentation() {
-            images.append(UIImage(data: data)!)
+
+        let orientationMap : [AVCaptureVideoOrientation : UIImageOrientation] = [
+            .portrait : .right,
+            .portraitUpsideDown : .left,
+            .landscapeLeft : .down,
+            .landscapeRight : .up
+        ]
+
+        if let data = photo.fileDataRepresentation(withReplacementMetadata: photo.metadata,
+                                                   replacementEmbeddedThumbnailPhotoFormat: photo.embeddedThumbnailPhotoFormat,
+                                                   replacementEmbeddedThumbnailPixelBuffer: photo.pixelBuffer,
+                                                   replacementDepthData: photo.depthData),
+            let connection = output.connection(with: .video),
+            let ii = UIImage(data: data) {
+            guard let t = transformImage(image: ii, orientation: orientationMap[connection.videoOrientation]!) else { self.toast(message: "画像の生成に失敗しました。"); return }
+            images.append(t)
         }
+    }
+
+    func transformImage(image: UIImage, orientation: UIImageOrientation) -> UIImage? {
+        UIGraphicsBeginImageContext(image.size)
+        guard let context = UIGraphicsGetCurrentContext() else { return nil }
+        context.translateBy(x: image.size.width/2, y: image.size.height/2)
+        let scale: Array<CGFloat>
+        if(orientation == .down || orientation == .left) { scale = [1.0, 1.0] } else { scale = [-1.0, 1.0] }
+        context.scaleBy(x: scale[0], y: scale[1])
+
+        let radianMap: [UIImageOrientation : CGFloat] = [
+            .right : 90 * CGFloat.pi / 180,//ホームボタン下
+            .left  : 270 * CGFloat.pi / 180,//ホームボタン上
+            .down : 180 * CGFloat.pi / 180,//ホームボタン左
+            .up :   0 * CGFloat.pi / 180,//ホームボタン右
+        ]
+        context.rotate(by: radianMap[orientation]!)
+
+        let rect: CGRect
+        if(orientation == .right || orientation == .left) {
+            rect = CGRect(x: -image.size.height/2, y: -image.size.width/2, width: image.size.height, height: image.size.width)
+        }else {
+            rect = CGRect(x: -image.size.width/2, y: -image.size.height/2, width: image.size.width, height: image.size.height)
+        }
+        guard let cgimage = image.cgImage else { return nil }
+        context.draw(cgimage, in: rect)
+        let transformed = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return transformed
     }
 }
 
