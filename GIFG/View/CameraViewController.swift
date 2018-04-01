@@ -202,7 +202,7 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
         guard let context = UIGraphicsGetCurrentContext() else { return nil }
         context.translateBy(x: image.size.width/2, y: image.size.height/2)
         let scale: Array<CGFloat>
-        if(orientation == .down || orientation == .left) { scale = [1.0, 1.0] } else { scale = [-1.0, 1.0] }
+        if(orientation == .down || orientation == .up) { scale = [1.0, -1.0] } else { scale = [-1.0, 1.0] }
         context.scaleBy(x: scale[0], y: scale[1])
 
         let radianMap: [UIImageOrientation : CGFloat] = [
