@@ -22,15 +22,17 @@ class CameraViewController: UIViewController {
     let createButton = UIButton.init()
     let disposebag = DisposeBag.init()
     let frameRatet = CMTimeMake(1, 5)
-    var session : AVCaptureSession!
-    var imageOutPut : AVCapturePhotoOutput!
+    var pointInterest: Variable<CGPoint> = Variable(CGPoint.zero)
+    var session: AVCaptureSession!
+    var imageOutPut: AVCapturePhotoOutput!
+    var videoInput: AVCaptureDeviceInput!
     var images = Array<UIImage>()
-    var previewLayer : AVCaptureVideoPreviewLayer!
-    
+    var previewLayer: AVCaptureVideoPreviewLayer!
+
     override func viewDidLoad() {
         edgesForExtendedLayout = []
         view.backgroundColor = Constants.GIFG_COLORS.LIGHT_BACK_GROUND;
-        
+
         label.text = "+"
         label.textAlignment = .center
         label.backgroundColor = UIColor.clear
@@ -41,17 +43,23 @@ class CameraViewController: UIViewController {
         session = AVCaptureSession()
         imageOutPut = AVCapturePhotoOutput()
         imageOutPut.isHighResolutionCaptureEnabled = true
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
-            let videoInput = try! AVCaptureDeviceInput.init(device: device)
-            session.addInput(videoInput)
-            session.addOutput(imageOutPut)
-            previewLayer = AVCaptureVideoPreviewLayer.init(session: session) //TODO nilのときがある?
-            previewLayer.videoGravity = AVLayerVideoGravity.resizeAspectFill
-            view.layer.addSublayer(previewLayer)
-            session.startRunning()
-            setOrientation()
-        }else {
-            return //TODO error
+        do {
+            if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+                videoInput = try AVCaptureDeviceInput.init(device: device)
+                session.addInput(videoInput)
+                session.addOutput(imageOutPut)
+                previewLayer = AVCaptureVideoPreviewLayer.init(session: session)
+                previewLayer.videoGravity = AVLayerVideoGravity.resizeAspectFill
+                view.layer.addSublayer(previewLayer)
+                session.startRunning()
+                setOrientation()
+            }else {
+                self.toast(message: "カメラを開けませんでした")
+                return
+            }
+        } catch {
+            //TODO errorログ
+            self.toast(message: "カメラを開けませんでした")
         }
         view.addSubview(label)
         
@@ -73,6 +81,14 @@ class CameraViewController: UIViewController {
             self?.createGif()
         }).disposed(by: disposebag)
         view.addSubview(createButton)
+        let tapgesture = UITapGestureRecognizer()
+        view.addGestureRecognizer(tapgesture)
+        tapgesture.rx.event.bind(onNext: { [weak self] x in
+            print("gesture point: \(x.location(in: self?.view))")
+            self?.pointInterest.value = x.location(in: self?.view)
+        } ).disposed(by: disposebag)
+
+        pointInterest.asObservable().distinctUntilChanged().subscribe(onNext: { [weak self] x in self?.focusOn(); }).disposed(by: disposebag)
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -101,6 +117,31 @@ class CameraViewController: UIViewController {
             guard let orientation = previewOrientationMap[deviceOrientation]! else { return } //対応していない回転方向の時は 前の回転状態を保つ
             if(connection.isVideoOrientationSupported) { connection.videoOrientation = orientation }
             if(outputConnection.isVideoOrientationSupported) { outputConnection.videoOrientation = orientation }
+        }
+    }
+
+    func setPoint(touchPoint: CGPoint) -> Void {
+        pointInterest.value = CGPoint(x: touchPoint.y / view.bounds.height, y: 1.0 - touchPoint.y/view.bounds.width)
+    }
+
+    func focusOn() -> Void {
+        do {
+            try videoInput.device.lockForConfiguration()
+            defer { videoInput.device.unlockForConfiguration() }
+            if videoInput.device.isFocusPointOfInterestSupported && videoInput.device.isFocusModeSupported(.continuousAutoFocus) {
+                videoInput.device.focusPointOfInterest = pointInterest.value
+                videoInput.device.focusMode = .continuousAutoFocus
+
+                print("focus しました: \(pointInterest.value)")
+            }
+            if videoInput.device.isExposurePointOfInterestSupported && videoInput.device.isExposureModeSupported(.autoExpose) {
+                videoInput.device.exposurePointOfInterest = pointInterest.value
+                videoInput.device.exposureMode = .autoExpose
+
+                print("exposure しました")
+            }
+        } catch {
+            //erroe処理
         }
     }
 
